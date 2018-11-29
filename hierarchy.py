@@ -13,7 +13,7 @@ nepochs = 20000
 eval_every = 100
 eval_every_gen = 10 # how often to eval during generalization phase
 termination_thresh = 0.01 # stop at this loss
-nruns = 100 
+nruns = 200 
 num_inputs = 4 + 2 # four shapes, two colors, each feature is one-hot
 num_outputs = 4 # four possible locations, one-hot
 num_hidden = num_inputs
@@ -59,6 +59,7 @@ dataset_3["x"][1, 5] = 1. # blue
 dataset_3["y"][1, 3] = 1. # Q4
 
 datasets = [dataset_1, dataset_2, dataset_1A, dataset_3]
+dataset_names = ["dataset_%s" % d for d in ["1", "2", "1A", "3"]]
 
 def batch_datasets(dataset_list):
     batch_dataset = {
@@ -117,11 +118,13 @@ for rseed in xrange(nruns):
                 losses.append(this_loss)
             return tuple(losses) # for format strings
 
-        def print_outputs():
-            for dataset in datasets:
-                print(sess.run(output, feed_dict={eta_ph: curr_eta,
+        def save_outputs(filename_prefix):
+            for dataset, name in zip(datasets, dataset_names):
+                res = sess.run(output, feed_dict={eta_ph: curr_eta,
                                                   input_ph: dataset["x"],
-                                                  target_ph: dataset["y"]}))
+                                                  target_ph: dataset["y"]})
+                filename = filename_prefix + name + "_gen_phase_beginning_outputs.csv"
+                np.savetxt(filename, res, delimiter=",")
 
         def run_train_epoch(datasets):
             for dataset in datasets:
@@ -164,6 +167,8 @@ for rseed in xrange(nruns):
 
                 if epoch % eta_decays_every == 0 and epoch > 0 and curr_eta > min_eta:
                     curr_eta *= eta_decay
+
+            save_outputs(filename_prefix)
 
             # generalization phase
             curr_eta = gen_eta
