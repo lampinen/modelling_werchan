@@ -1,0 +1,174 @@
+---
+title: "Hierarchical Rules Analyses"
+author: "Andrew Lampinen"
+date: "November 29, 2018"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# setup libraries, input parameters
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+```
+
+Parameters: 
+
+```{r params}
+num_runs = 100
+num_layerss = c(2, 4)
+nepochs = 20000
+early_stopping_thresh = 0.01 # loss value at which training was early-stopped
+```
+
+# data loading
+
+```{r loading_data, message=FALSE}
+d = data.frame()
+for (run_i in 0:(num_runs-1)) {
+  for (num_layers in num_layerss) {
+    filename = sprintf("results/nlayer_%i_rseed_%i_loss_track.csv",
+                       num_layers, run_i)
+    this_d = read_csv(filename) %>%
+      mutate(run=run_i, num_layers=num_layers)
+    d = bind_rows(d, this_d)
+  }
+}
+```
+
+```{r}
+last_non_NA = function(vector) {
+  return(tail(vector[!is.na(vector)], 1))
+}
+```
+
+```{r, creating_columns}
+d = d %>%
+  mutate(generalization =  epoch >= nepochs) %>% # first training phase will last at most nepochs, and then generalization phase occurs after
+  gather(observation, loss, starts_with("loss")) %>%
+  separate(observation, c("observation_type", "dataset")) %>%
+  select(-observation_type) %>%  # redundant
+  mutate(dataset=factor(dataset)) %>%
+  complete(run, nesting(num_layers, generalization, dataset, epoch), fill=list(loss=NA)) %>%
+  group_by(run, generalization, num_layers, dataset) %>%
+  mutate(loss=ifelse(is.na(loss), # fill in missing time-series values with last value before early stopping
+                     last_non_NA(loss),
+                     loss)) 
+```
+
+# basic learning curves
+
+```{r}
+theme_set(theme_bw() +
+          theme(panel.grid=element_blank()))
+```
+
+Plot initial learning curves: 
+```{r}
+ggplot(data=d %>%
+         filter(!generalization), 
+       aes(x=epoch, y=loss, color=dataset)) +
+  geom_line(stat="summary", fun.y=mean, size=1) +
+#  geom_line(aes(group=interaction(run, dataset)), alpha=0.1) +
+  facet_wrap(.~ num_layers, scales="free") +
+  labs(y="Loss (cross-entropy)") +
+  scale_color_brewer(palette="Set1")
+```
+
+## generalization phase
+
+Plot generalization curves: 
+```{r}
+ggplot(data=d %>%
+         filter(generalization), 
+       aes(x=epoch - 20000, y=loss, color=dataset)) +
+  geom_line(stat="summary", fun.y=mean, size=1) +
+#  geom_line(aes(group=interaction(run, dataset)), alpha=0.4) +
+  facet_wrap(.~ num_layers, scales="free") +
+  labs(x="Epoch", y="Loss (cross-entropy)") +
+  scale_color_brewer(palette="Set1")
+```
+
+Right plot is 2 layer networks (single hidden layer), left is 4 (deeper). Deep networks especially show a distinct slowdown in learning of dataset 3 compared to dataset 1A in the generalization phase. 
+
+**Thus simple neural network models without explicitly hierarchical hypotheses exhibit this effect.**
+
+# stopping times
+
+How much slower is learning actually occurring? When are the networks reaching a loss of 0.05 (close to perfect) on each dataset?
+
+```{r}
+stopping_time_d = d %>%
+  filter(loss <= 0.05) %>% 
+  group_by(run, num_layers, dataset) %>%
+  summarize(learned_epoch = min(epoch)) # what was the first epoch at which loss was less than 0.05?
+```
+
+```{r}
+ggplot(stopping_time_d %>%
+         filter(dataset %in% c("1A", "3")), aes(x=learned_epoch - 20000, fill=dataset)) +
+  geom_histogram() +
+  facet_wrap(~dataset) +
+  labs(x="First epoch when loss < 0.05") +
+  scale_fill_brewer(palette="Set1", drop=F)
+```
+
+dataset 1A is always learned relatively quickly
+
+# subgroup analyses
+
+Find runs that learned dataset 3 slowly:
+```{r}
+stopping_time_d = stopping_time_d %>%
+  mutate(slow_learner = learned_epoch > 25000)
+```
+
+```{r}
+d = left_join(d, stopping_time_d) %>%
+  mutate(slow_learner = ifelse(is.na(slow_learner), TRUE, slow_learner)) # replace values for those that never learned in time
+```
+
+```{r}
+d %>% 
+  filter(num_layers == 4) %>%
+  group_by(run) %>%
+  summarize(slow_learner=head(slow_learner, 1)) %>%
+  ungroup() %>%
+  summarize(pct_slow_learners = mean(slow_learner))
+```
+
+
+Plot generalization curves split by subgroup for 4 layer networks (including 5% and 95% quantiles): 
+
+```{r}
+ggplot(data=d %>%
+         filter(generalization, 
+                num_layers == 4,
+                epoch == min(epoch) | epoch %% 200 == 0), 
+       aes(x=epoch - 20000, y=loss, color=dataset, fill=dataset)) +
+  geom_line(stat="summary", fun.y=mean, size=1) +
+  geom_ribbon(stat="summary", fun.ymin=function(x) {quantile(x, c(.05))}, fun.ymax=function(x) {quantile(x, c(.95))}, alpha=0.2) +
+  facet_wrap(.~ slow_learner) +
+  labs(x="Epoch", y="Loss (cross-entropy)") +
+  scale_color_brewer(palette="Set1")+
+  scale_fill_brewer(palette="Set1")
+```
+
+## is it just due to the slow learners being much worse on this dataset to begin with?
+
+```{r}
+ggplot(d %>%
+         filter(dataset %in% c("1A", "3"),
+                num_layers == 4,
+                generalization,
+                epoch==min(epoch)), aes(x=loss, fill=slow_learner)) +
+  geom_histogram() +
+  facet_grid(slow_learner~dataset) +
+  scale_fill_brewer(palette="Dark2")
+```
+
+Yes, this appears in large part to explain the effect. But why are they worse on dataset 3 to begin with?
