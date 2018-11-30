@@ -171,4 +171,9 @@ ggplot(d %>%
   scale_fill_brewer(palette="Dark2")
 ```
 
-Yes, this appears in large part to explain the effect. But why are they worse on dataset 3 to begin with?
+Yes, this appears in large part to explain the effect. But why are they worse on dataset 3 to begin with? It turns out that it basically comes down to whether they are making spread out predictions or highly specific (generally wrong) predictions on the dataset at the beginning of the generalization phase, see below for some examples (columns are different predicted quadrants, rows are red/blue within the context, color is the predicted probability):
+
+![Fast learner example](results/nlayer_4_rseed_0_dataset_3_gen_phase_beginning_outputs.png "Logo Title Text 1")
+
+![Slow learner example](results/nlayer_4_rseed_1_dataset_3_gen_phase_beginning_outputs.png "Logo Title Text 1")
+
